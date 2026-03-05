@@ -1,13 +1,10 @@
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:health_wallet/core/theme/app_insets.dart';
 import 'package:health_wallet/core/theme/app_text_style.dart';
 import 'package:health_wallet/core/utils/build_context_extension.dart';
 import 'package:health_wallet/core/widgets/custom_app_bar.dart';
 import 'package:health_wallet/features/consent/data/uhi_switch_service.dart';
-import 'package:health_wallet/features/user/presentation/bloc/user_bloc.dart';
-import 'package:health_wallet/features/user/presentation/preferences_modal/sections/patient/bloc/patient_bloc.dart';
 
 /// Tab 1 — Consent Management via UHI-switch key store server.
 @RoutePage()
@@ -20,30 +17,24 @@ class ConsentPage extends StatefulWidget {
 
 class _ConsentPageState extends State<ConsentPage> {
   List<UhiConsentArtifact>? _consents;
+  UhiPatientSummary? _summary;
+  List<UhiHospital>? _hospitals;
   bool _isLoading = true;
   String? _error;
   bool _serverUnavailable = false;
 
+  /// Demo patient — Devaganesh S
+  static const _demoAbhaId = '91-1234-5678-9012';
+
   @override
   void initState() {
     super.initState();
-    _loadConsents();
+    _loadAll();
   }
 
-  String _getPatientId(BuildContext context) {
-    try {
-      final patientState = context.read<PatientBloc>().state;
-      final selectedId = patientState.selectedPatientId;
-      if (selectedId != null && selectedId.isNotEmpty) return selectedId;
-    } catch (_) {}
-    try {
-      final userState = context.read<UserBloc>().state;
-      if (userState.user.name.isNotEmpty) return userState.user.name;
-    } catch (_) {}
-    return 'PATIENT_001';
-  }
+  String _getPatientAbhaId() => _demoAbhaId;
 
-  Future<void> _loadConsents() async {
+  Future<void> _loadAll() async {
     setState(() {
       _isLoading = true;
       _error = null;
@@ -51,7 +42,6 @@ class _ConsentPageState extends State<ConsentPage> {
     });
 
     try {
-      final patientId = _getPatientId(context);
       final reachable = await UhiSwitchService.isServerReachable();
       if (!reachable) {
         setState(() {
@@ -60,9 +50,18 @@ class _ConsentPageState extends State<ConsentPage> {
         });
         return;
       }
-      final consents = await UhiSwitchService.listConsents(patientId);
+
+      final abha = _getPatientAbhaId();
+      final results = await Future.wait([
+        UhiSwitchService.listConsents(abha),
+        UhiSwitchService.getPatientSummary(abha),
+        UhiSwitchService.listHospitals(),
+      ]);
+
       setState(() {
-        _consents = consents;
+        _consents = results[0] as List<UhiConsentArtifact>;
+        _summary = results[1] as UhiPatientSummary;
+        _hospitals = results[2] as List<UhiHospital>;
         _isLoading = false;
       });
     } catch (e) {
@@ -73,14 +72,41 @@ class _ConsentPageState extends State<ConsentPage> {
     }
   }
 
+  Future<void> _revokeConsent(String consentId) async {
+    try {
+      await UhiSwitchService.revokeConsent(consentId);
+      await _loadAll();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Consent revoked'),
+            backgroundColor: Colors.orange.shade700,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to revoke: $e'),
+            backgroundColor: Colors.red.shade600,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _showGrantConsentSheet() async {
     final hospitalController = TextEditingController();
-    final doctorController = TextEditingController();
-    final selectedPermissions = <String>['Observation', 'Condition'];
-    DateTime expiresAt = DateTime.now().add(const Duration(days: 30));
-
-    // Cache patientId before the async operation to avoid use_build_context_synchronously
-    final patientId = _getPatientId(context);
+    final selectedPermissions = <String>[
+      'Patient', 'Observation', 'DiagnosticReport', 'Condition',
+      'MedicationRequest', 'AllergyIntolerance',
+    ];
+    int validHours = 24;
 
     final confirmed = await showModalBottomSheet<bool>(
       context: context,
@@ -88,29 +114,31 @@ class _ConsentPageState extends State<ConsentPage> {
       backgroundColor: Colors.transparent,
       builder: (ctx) => _GrantConsentSheet(
         hospitalController: hospitalController,
-        doctorController: doctorController,
+        hospitals: _hospitals ?? [],
         initialPermissions: selectedPermissions,
-        initialExpiry: expiresAt,
-        onExpirChanged: (d) => expiresAt = d,
+        initialHours: validHours,
+        onHoursChanged: (h) => validHours = h,
       ),
     );
 
     if (confirmed == true) {
       try {
         setState(() => _isLoading = true);
-        final request = UhiConsentGrantRequest(
-          patientAbhaId: patientId,
-          doctorId: doctorController.text.trim().isEmpty
-              ? 'DR_UNKNOWN'
-              : doctorController.text.trim(),
-          hospitalId: hospitalController.text.trim().isEmpty
-              ? 'HOSPITAL_UNKNOWN'
-              : hospitalController.text.trim(),
+        final hospitalId = hospitalController.text.trim();
+        if (hospitalId.isEmpty) {
+          setState(() {
+            _error = 'Please select a hospital';
+            _isLoading = false;
+          });
+          return;
+        }
+        await UhiSwitchService.grantConsent(
+          patientAbhaId: _getPatientAbhaId(),
+          requestingHospitalId: hospitalId,
           permissions: selectedPermissions,
-          expiresAt: expiresAt,
+          validHours: validHours,
         );
-        await UhiSwitchService.grantConsent(request);
-        await _loadConsents();
+        await _loadAll();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -142,7 +170,7 @@ class _ConsentPageState extends State<ConsentPage> {
           IconButton(
             icon: Icon(Icons.refresh_outlined,
                 color: context.colorScheme.onSurface),
-            onPressed: _loadConsents,
+            onPressed: _loadAll,
           ),
         ],
       ),
@@ -162,6 +190,10 @@ class _ConsentPageState extends State<ConsentPage> {
           else if (_error != null)
             _buildErrorCard(context)
           else ...[
+            // Patient summary card
+            if (_summary != null) _buildSummaryCard(context),
+            if (_summary != null) const SizedBox(height: Insets.large),
+
             // Active Consents
             Text(
               'Active Consents',
@@ -188,7 +220,9 @@ class _ConsentPageState extends State<ConsentPage> {
                         Padding(
                           padding: const EdgeInsets.only(bottom: Insets.small),
                           child: _ConsentCard(
-                              artifact: c, onRevoke: _loadConsents),
+                            artifact: c,
+                            onRevoke: () => _revokeConsent(c.consentId),
+                          ),
                         ),
                       if (pastConsents.isNotEmpty) ...[
                         const SizedBox(height: Insets.medium),
@@ -205,7 +239,9 @@ class _ConsentPageState extends State<ConsentPage> {
                             padding:
                                 const EdgeInsets.only(bottom: Insets.small),
                             child: _ConsentCard(
-                                artifact: c, onRevoke: _loadConsents),
+                              artifact: c,
+                              onRevoke: () => _revokeConsent(c.consentId),
+                            ),
                           ),
                       ],
                     ],
@@ -327,7 +363,7 @@ class _ConsentPageState extends State<ConsentPage> {
           ),
           const SizedBox(height: Insets.medium),
           OutlinedButton.icon(
-            onPressed: _loadConsents,
+            onPressed: _loadAll,
             icon: const Icon(Icons.refresh, size: 16),
             label: const Text('Retry'),
           ),
@@ -364,7 +400,7 @@ class _ConsentPageState extends State<ConsentPage> {
           ),
           const SizedBox(height: Insets.medium),
           OutlinedButton.icon(
-            onPressed: _loadConsents,
+            onPressed: _loadAll,
             icon: const Icon(Icons.refresh, size: 16),
             label: const Text('Retry'),
           ),
@@ -413,6 +449,81 @@ class _ConsentPageState extends State<ConsentPage> {
     );
   }
 
+  Widget _buildSummaryCard(BuildContext context) {
+    final s = _summary!;
+    return Container(
+      padding: const EdgeInsets.all(Insets.medium),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.teal.withValues(alpha: 0.08),
+            Colors.cyan.withValues(alpha: 0.04),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.teal.withValues(alpha: 0.15)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.analytics_outlined, color: Colors.teal, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Health Data Summary',
+                style: AppTextStyle.titleSmall.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: context.colorScheme.onSurface,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: Insets.normal),
+          Row(
+            children: [
+              _SummaryChip(
+                icon: Icons.local_hospital,
+                label: '${s.hospitalsWithData.length}',
+                subtitle: 'Hospitals',
+              ),
+              const SizedBox(width: Insets.small),
+              _SummaryChip(
+                icon: Icons.folder_outlined,
+                label: '${s.totalBundles}',
+                subtitle: 'Bundles',
+              ),
+              const SizedBox(width: Insets.small),
+              _SummaryChip(
+                icon: Icons.description_outlined,
+                label: '${s.totalResources}',
+                subtitle: 'Resources',
+              ),
+              const SizedBox(width: Insets.small),
+              _SummaryChip(
+                icon: Icons.verified_user,
+                label: '${s.activeConsents}',
+                subtitle: 'Active',
+              ),
+            ],
+          ),
+          if (s.hospitalsWithData.isNotEmpty) ...[
+            const SizedBox(height: Insets.small),
+            Text(
+              'Data at: ${s.hospitalsWithData.join(", ")}',
+              style: AppTextStyle.labelSmall.copyWith(
+                color: context.colorScheme.onSurface.withValues(alpha: 0.5),
+                fontSize: 10,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildInfoSection(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(Insets.medium),
@@ -448,7 +559,7 @@ class _ConsentPageState extends State<ConsentPage> {
           const SizedBox(height: Insets.small),
           _InfoPoint(
             icon: Icons.lock_outline,
-            text: 'Your data stays on your device until you grant access',
+            text: 'Your data is encrypted end-to-end via S3 storage',
           ),
           _InfoPoint(
             icon: Icons.timer_outlined,
@@ -456,11 +567,11 @@ class _ConsentPageState extends State<ConsentPage> {
           ),
           _InfoPoint(
             icon: Icons.link_outlined,
-            text: 'Connected via UHI-switch inter-hospital key store',
+            text: 'Connected via UHI Switch — zero patient data stored',
           ),
           _InfoPoint(
             icon: Icons.visibility_outlined,
-            text: 'Choose exactly which record types to share',
+            text: 'You can revoke access at any time',
           ),
         ],
       ),
@@ -540,13 +651,14 @@ class _ConsentCard extends StatelessWidget {
                         color: context.colorScheme.onSurface,
                       ),
                     ),
-                    Text(
-                      'Dr: ${artifact.doctorId}',
-                      style: AppTextStyle.labelSmall.copyWith(
-                        color: context.colorScheme.onSurface
-                            .withValues(alpha: 0.5),
+                    if (artifact.purpose != null)
+                      Text(
+                        artifact.purpose!,
+                        style: AppTextStyle.labelSmall.copyWith(
+                          color: context.colorScheme.onSurface
+                              .withValues(alpha: 0.5),
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -592,13 +704,58 @@ class _ConsentCard extends StatelessWidget {
           const SizedBox(height: Insets.small),
           Row(
             children: [
-              _DateChip(label: 'Granted', date: formatDate(artifact.grantedAt)),
+              if (artifact.grantedAt != null)
+                _DateChip(label: 'Granted', date: formatDate(artifact.grantedAt!)),
               const SizedBox(width: Insets.small),
-              _DateChip(label: 'Expires', date: formatDate(artifact.expiresAt)),
+              if (artifact.expiresAt != null)
+                _DateChip(label: 'Expires', date: formatDate(artifact.expiresAt!)),
               const Spacer(),
+              if (isActive)
+                TextButton.icon(
+                  onPressed: onRevoke,
+                  icon: Icon(Icons.cancel_outlined, size: 14, color: Colors.red.shade400),
+                  label: Text('Revoke', style: TextStyle(color: Colors.red.shade400, fontSize: 11)),
+                  style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: Size.zero),
+                ),
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _SummaryChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  const _SummaryChip({required this.icon, required this.label, required this.subtitle});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+        decoration: BoxDecoration(
+          color: context.isDarkMode
+              ? Colors.white.withValues(alpha: 0.04)
+              : Colors.white.withValues(alpha: 0.8),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, size: 18, color: Colors.teal),
+            const SizedBox(height: 4),
+            Text(label, style: AppTextStyle.titleSmall.copyWith(
+              fontWeight: FontWeight.w700,
+              color: context.colorScheme.onSurface,
+            )),
+            Text(subtitle, style: AppTextStyle.labelSmall.copyWith(
+              color: context.colorScheme.onSurface.withValues(alpha: 0.5),
+              fontSize: 9,
+            )),
+          ],
+        ),
       ),
     );
   }
@@ -672,17 +829,17 @@ class _InfoPoint extends StatelessWidget {
 
 class _GrantConsentSheet extends StatefulWidget {
   final TextEditingController hospitalController;
-  final TextEditingController doctorController;
+  final List<UhiHospital> hospitals;
   final List<String> initialPermissions;
-  final DateTime initialExpiry;
-  final ValueChanged<DateTime> onExpirChanged;
+  final int initialHours;
+  final ValueChanged<int> onHoursChanged;
 
   const _GrantConsentSheet({
     required this.hospitalController,
-    required this.doctorController,
+    required this.hospitals,
     required this.initialPermissions,
-    required this.initialExpiry,
-    required this.onExpirChanged,
+    required this.initialHours,
+    required this.onHoursChanged,
   });
 
   @override
@@ -691,24 +848,24 @@ class _GrantConsentSheet extends StatefulWidget {
 
 class _GrantConsentSheetState extends State<_GrantConsentSheet> {
   final _availablePermissions = [
+    'Patient',
     'Observation',
     'Condition',
     'MedicationRequest',
     'AllergyIntolerance',
-    'Procedure',
     'DiagnosticReport',
     'Encounter',
     'Immunization',
   ];
 
   late List<String> _selectedPermissions;
-  late DateTime _expiresAt;
+  late int _validHours;
 
   @override
   void initState() {
     super.initState();
     _selectedPermissions = List.from(widget.initialPermissions);
-    _expiresAt = widget.initialExpiry;
+    _validHours = widget.initialHours;
   }
 
   @override
@@ -745,27 +902,97 @@ class _GrantConsentSheetState extends State<_GrantConsentSheet> {
                   fontWeight: FontWeight.w700,
                 )),
             const SizedBox(height: Insets.medium),
-            TextField(
-              controller: widget.hospitalController,
-              decoration: InputDecoration(
-                labelText: 'Hospital ID',
-                hintText: 'e.g. AIIMS_DELHI',
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                prefixIcon: const Icon(Icons.local_hospital_outlined),
+
+            // Hospital selection
+            if (widget.hospitals.isNotEmpty) ...[
+              Text('Select Hospital',
+                  style: AppTextStyle.bodySmall
+                      .copyWith(fontWeight: FontWeight.w600)),
+              const SizedBox(height: Insets.small),
+              ...widget.hospitals.map((h) {
+                final selected =
+                    widget.hospitalController.text == h.hospitalId;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () {
+                      setState(() {
+                        widget.hospitalController.text = h.hospitalId;
+                      });
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? context.colorScheme.primary
+                                .withValues(alpha: 0.08)
+                            : context.isDarkMode
+                                ? Colors.white.withValues(alpha: 0.03)
+                                : Colors.black.withValues(alpha: 0.02),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: selected
+                              ? context.colorScheme.primary
+                              : Colors.grey.withValues(alpha: 0.15),
+                          width: selected ? 1.5 : 1,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.local_hospital_outlined,
+                            size: 18,
+                            color: selected
+                                ? context.colorScheme.primary
+                                : context.colorScheme.onSurface
+                                    .withValues(alpha: 0.5),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  h.name,
+                                  style: AppTextStyle.bodySmall.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                    color: context.colorScheme.onSurface,
+                                  ),
+                                ),
+                                if (h.city != null)
+                                  Text(
+                                    '${h.city}${h.state != null ? ", ${h.state}" : ""}',
+                                    style: AppTextStyle.labelSmall.copyWith(
+                                      color: context.colorScheme.onSurface
+                                          .withValues(alpha: 0.5),
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          if (selected)
+                            Icon(Icons.check_circle,
+                                size: 18, color: context.colorScheme.primary),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ] else
+              TextField(
+                controller: widget.hospitalController,
+                decoration: InputDecoration(
+                  labelText: 'Hospital ID',
+                  hintText: 'e.g. HOSP-CITYCARE-A',
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  prefixIcon: const Icon(Icons.local_hospital_outlined),
+                ),
               ),
-            ),
-            const SizedBox(height: Insets.normal),
-            TextField(
-              controller: widget.doctorController,
-              decoration: InputDecoration(
-                labelText: 'Doctor ID (optional)',
-                hintText: 'e.g. DR_SHARMA',
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                prefixIcon: const Icon(Icons.person_outline),
-              ),
-            ),
+
             const SizedBox(height: Insets.medium),
             Text('Record Access',
                 style: AppTextStyle.bodySmall
@@ -802,37 +1029,34 @@ class _GrantConsentSheetState extends State<_GrantConsentSheet> {
               }).toList(),
             ),
             const SizedBox(height: Insets.medium),
+
+            // Validity slider
             Row(
               children: [
-                Text('Expires: ',
+                Text('Valid for: ',
                     style: AppTextStyle.bodySmall
                         .copyWith(fontWeight: FontWeight.w500)),
                 Text(
-                  '${_expiresAt.day}/${_expiresAt.month}/${_expiresAt.year}',
+                  '${_validHours}h',
                   style: AppTextStyle.bodySmall.copyWith(
                     color: context.colorScheme.primary,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
                   ),
-                ),
-                const Spacer(),
-                TextButton.icon(
-                  icon: const Icon(Icons.calendar_today_outlined, size: 16),
-                  label: const Text('Change'),
-                  onPressed: () async {
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate: _expiresAt,
-                      firstDate: DateTime.now().add(const Duration(days: 1)),
-                      lastDate: DateTime.now().add(const Duration(days: 365)),
-                    );
-                    if (picked != null) {
-                      setState(() => _expiresAt = picked);
-                      widget.onExpirChanged(picked);
-                    }
-                  },
                 ),
               ],
             ),
+            Slider(
+              value: _validHours.toDouble(),
+              min: 1,
+              max: 168,
+              divisions: 167,
+              label: '${_validHours}h',
+              onChanged: (val) {
+                setState(() => _validHours = val.round());
+                widget.onHoursChanged(_validHours);
+              },
+            ),
+
             const SizedBox(height: Insets.large),
             Row(
               children: [
@@ -850,7 +1074,8 @@ class _GrantConsentSheetState extends State<_GrantConsentSheet> {
                 const SizedBox(width: Insets.normal),
                 Expanded(
                   child: FilledButton(
-                    onPressed: _selectedPermissions.isEmpty
+                    onPressed: _selectedPermissions.isEmpty ||
+                            widget.hospitalController.text.isEmpty
                         ? null
                         : () => Navigator.pop(context, true),
                     style: FilledButton.styleFrom(
@@ -869,3 +1094,4 @@ class _GrantConsentSheetState extends State<_GrantConsentSheet> {
     );
   }
 }
+

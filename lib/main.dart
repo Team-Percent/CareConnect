@@ -4,6 +4,7 @@ import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:health_wallet/core/config/env/env.dart';
 import 'package:health_wallet/app/app.dart';
 import 'package:health_wallet/bootstrap.dart';
+import 'package:health_wallet/core/demo/demo_data_seeder.dart';
 import 'package:health_wallet/core/di/injection.dart';
 import 'package:health_wallet/core/services/deep_link_service.dart';
 import 'package:health_wallet/core/services/share_intent_service.dart';
@@ -15,6 +16,9 @@ void main() async {
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
 
   await configureDependencies();
+
+  // Seed demo patient data (Devaganesh S) on first launch
+  await DemoDataSeeder.seedIfNeeded();
 
   getIt<ShareIntentService>().initialize();
   getIt<DeepLinkService>().initialize();

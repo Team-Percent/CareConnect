@@ -11,7 +11,7 @@
 
     <application
         android:name="${applicationName}"
-        android:label="CareConnect"
+        android:label="MediVista"
         android:icon="@mipmap/health_wallet"
         android:largeHeap="true"
         android:enableOnBackInvokedCallback="true">

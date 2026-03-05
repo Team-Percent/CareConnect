@@ -63,7 +63,8 @@ class App extends StatelessWidget {
         child: BlocBuilder<UserBloc, UserState>(
           builder: (context, state) {
             return MaterialApp.router(
-              title: 'CareConnect',
+              title: 'MediVista',
+              debugShowCheckedModeBanner: false,
               theme: AppTheme.lightTheme,
               darkTheme: AppTheme.darkTheme,
               themeMode:

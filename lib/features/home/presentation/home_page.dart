@@ -16,12 +16,10 @@ import 'package:health_wallet/core/widgets/custom_app_bar.dart';
 import 'package:health_wallet/features/home/presentation/widgets/home_section_header.dart';
 import 'package:health_wallet/features/home/presentation/widgets/source_selector_widget.dart';
 import 'package:health_wallet/features/home/presentation/widgets/section_info_modal.dart';
-import 'package:health_wallet/features/home/presentation/sections/vitals_section.dart';
 import 'package:health_wallet/features/home/presentation/sections/medical_records_section.dart';
 import 'package:health_wallet/features/home/presentation/sections/recent_records_section.dart';
 import 'package:health_wallet/features/user/presentation/preferences_modal/preference_modal.dart';
 import 'package:health_wallet/features/home/core/constants/home_constants.dart';
-import 'package:health_wallet/features/home/domain/entities/patient_vitals.dart';
 import 'package:health_wallet/gen/assets.gen.dart';
 import 'package:health_wallet/core/navigation/app_router.dart';
 import 'package:health_wallet/features/records/domain/utils/fhir_field_extractor.dart';
@@ -199,16 +197,12 @@ class HomeViewState extends State<HomeView> {
   }
 
   Widget _buildHomeContent(BuildContext context, HomeState state) {
-    final hasVitalDataLoaded = state.patientVitals
-        .any((vital) => vital.value != 'N/A' && vital.observationId != null);
-
     final hasOverviewDataLoaded =
         state.overviewCards.any((card) => card.count != '0');
 
     final hasRecent = state.recentRecords.isNotEmpty;
 
-    final hasAnyMeaningfulData =
-        hasVitalDataLoaded || hasOverviewDataLoaded || hasRecent;
+    final hasAnyMeaningfulData = hasOverviewDataLoaded || hasRecent;
 
     if (!hasAnyMeaningfulData && !state.editMode) {
       return _buildEmptyProfile(context);
@@ -308,70 +302,7 @@ class HomeViewState extends State<HomeView> {
                         height: MediaQuery.of(context).size.height < 700
                             ? Insets.small
                             : Insets.medium),
-                    if (state.hasDataLoaded || editMode)
-                      Column(
-                        children: [
-                          HomeSectionHeader(
-                            title: context.l10n.homeVitalSigns,
-                            filterLabel: editMode ? context.l10n.vitals : null,
-                            onFilterTap: editMode
-                                ? () =>
-                                    HomeDialogController.showEditVitalsDialog(
-                                      context,
-                                      state,
-                                      (updated) {
-                                        context.read<HomeBloc>().add(
-                                            HomeVitalsFiltersChanged(updated));
-                                      },
-                                    )
-                                : null,
-                            colorScheme: colorScheme,
-                            isEditMode: editMode,
-                            isFilterDisabled: state.vitalsExpanded,
-                            onInfoTap: () => SectionInfoModal.show(
-                              context,
-                              context.l10n.vitalSigns,
-                              context.l10n.longPressToReorder,
-                            ),
-                          ),
-                          SizedBox(
-                              height: MediaQuery.of(context).size.height < 700
-                                  ? Insets.small
-                                  : Insets.smallNormal),
-                          VitalsSection(
-                            vitals: state.vitalsExpanded
-                                ? state.allAvailableVitals
-                                : state.patientVitals,
-                            allAvailableVitals: state.allAvailableVitals,
-                            editMode: editMode,
-                            vitalsExpanded: state.vitalsExpanded,
-                            firstCardKey:
-                                _highlightController.firstVitalCardKey,
-                            selectedVitals: Map.fromEntries(
-                              state.selectedVitals.entries.map(
-                                (e) => MapEntry(e.key.title, e.value),
-                              ),
-                            ),
-                            onReorder: (oldIndex, newIndex) {
-                              context
-                                  .read<HomeBloc>()
-                                  .add(HomeVitalsReordered(oldIndex, newIndex));
-                            },
-                            onLongPressCard: () => context
-                                .read<HomeBloc>()
-                                .add(const HomeEditModeChanged(true)),
-                            onExpandToggle: () {
-                              context
-                                  .read<HomeBloc>()
-                                  .add(const HomeVitalsExpansionToggled());
-                            },
-                          ),
-                        ],
-                      ),
-                    SizedBox(
-                        height: MediaQuery.of(context).size.height < 700
-                            ? Insets.medium
-                            : Insets.large),
+                    // Vitals section removed for MediVista
                     if (state.hasDataLoaded || editMode)
                       Column(
                         children: [
